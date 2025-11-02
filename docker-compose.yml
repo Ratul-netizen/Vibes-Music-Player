@@ -1,0 +1,23 @@
+services:
+  music-player:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: music-player
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist database across container restarts
+      - ./playlist.db:/app/playlist.db
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_PATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/tracks"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
