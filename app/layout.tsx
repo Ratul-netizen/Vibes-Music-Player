@@ -21,7 +21,8 @@ export default function RootLayout({
     <html lang="en">
       <body className={`font-sans antialiased`}>
         {children}
-        <Analytics />
+        {/* Only load Analytics in production to avoid 404 errors in local dev */}
+        {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
   )

@@ -36,11 +36,13 @@ export function NowPlayingBubble({
   const animationFrameRef = useRef<number | null>(null)
   const [isExpanded, setIsExpanded] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isClosed, setIsClosed] = useState(false)
   const [volume, setVolume] = useState(1)
   const [currentTime, setCurrentTime] = useState(0)
   const [waveformReady, setWaveformReady] = useState(false)
   const [currentAmplitude, setCurrentAmplitude] = useState(0)
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastMouseMoveRef = useRef(0)
   const [dominantColor, setDominantColor] = useState<string>("#9333ea")
   const [showLyrics, setShowLyrics] = useState(true)
   
@@ -64,6 +66,19 @@ export function NowPlayingBubble({
     if (!track?.lyrics) return []
     return track.lyrics.split("\n").filter((line) => line.trim())
   }, [track?.lyrics])
+
+  // Re-open bubble automatically when a track is selected/changed or playback starts
+  useEffect(() => {
+    if (track) {
+      setIsClosed(false)
+    }
+  }, [track?.id])
+
+  useEffect(() => {
+    if (isPlaying) {
+      setIsClosed(false)
+    }
+  }, [isPlaying])
   
   // Calculate current lyric line based on progress (simple approximation)
   const currentLyricIndex = useMemo(() => {
@@ -72,9 +87,20 @@ export function NowPlayingBubble({
     return Math.floor(progressRatio * lyricsLines.length)
   }, [progress, lyricsLines.length, track?.duration_seconds])
 
-  // Initialize waveform and audio analysis
+  // Initialize waveform and audio analysis - memoized to prevent reinit
   useEffect(() => {
     if (!waveformRef.current || !track) return
+    
+    // Clean up previous instance
+    if (wavesurferRef.current) {
+      const ws = wavesurferRef.current
+      try {
+        ws.destroy()
+      } catch (error) {
+        console.warn("Error destroying wavesurfer:", error)
+      }
+      wavesurferRef.current = null
+    }
 
     // Create waveform instance with enhanced settings for fullscreen
     // @ts-ignore
@@ -90,9 +116,34 @@ export function NowPlayingBubble({
       interact: isExpanded || isFullscreen,
       backend: "WebAudio",
       barGap: isFullscreen ? 2 : 1,
+      // Performance optimizations
+      pixelRatio: window.devicePixelRatio || 1,
     })
 
     wavesurferRef.current = wavesurfer
+    
+    // Debounced progress update function
+    let lastUpdateTime = 0
+    const debounceDelay = 200 // Update max every 200ms
+    
+    const handleAudioProcess = () => {
+      const now = Date.now()
+      if (now - lastUpdateTime < debounceDelay) return
+      lastUpdateTime = now
+      
+      if (wavesurfer && isPlaying) {
+        const currentTime = wavesurfer.getCurrentTime()
+        const duration = wavesurfer.getDuration()
+        if (duration > 0) {
+          const newProgress = (currentTime / duration) * 100
+          usePlayerStore.getState().setProgress(newProgress)
+          setCurrentTime(currentTime)
+        }
+      }
+    }
+    
+    // Store unsubscribe function for proper cleanup
+    const unsubscribeAudioProcess = wavesurfer.on("audioprocess", handleAudioProcess)
 
     // Set up audio analyser for rhythm visualization
     try {
@@ -133,23 +184,60 @@ export function NowPlayingBubble({
 
     // Generate demo waveform data (since we don't have actual audio files)
     // In production, you would load an actual audio URL
-    const generateDemoWaveform = () => {
+    const generateDemoWaveform = async () => {
       try {
-        // Create a silent audio buffer for waveform visualization
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-        const buffer = audioContext.createBuffer(1, 44100 * track.duration_seconds, 44100)
-        const data = buffer.getChannelData(0)
-        
-        // Generate random waveform data
-        for (let i = 0; i < data.length; i++) {
-          data[i] = Math.random() * 0.3 - 0.15
-        }
-        
-        // @ts-ignore
-        wavesurfer.loadDecodedBuffer(buffer)
-        setTimeout(() => {
+        // For Wavesurfer v7, use load() method - do NOT use loadDecodedBuffer (removed in v7)
+        if (track.audioUrl) {
+          await wavesurfer.load(track.audioUrl)
           setWaveformReady(true)
-        }, 500)
+        } else {
+          // If no audio URL, create a simple silent waveform
+          // Generate a minimal audio blob for visualization
+          const sampleRate = 44100
+          const duration = track.duration_seconds || 180
+          const numSamples = sampleRate * duration
+          const buffer = new ArrayBuffer(44 + numSamples * 2)
+          const view = new DataView(buffer)
+          
+          // WAV header
+          const writeString = (offset: number, string: string) => {
+            for (let i = 0; i < string.length; i++) {
+              view.setUint8(offset + i, string.charCodeAt(i))
+            }
+          }
+          
+          writeString(0, 'RIFF')
+          view.setUint32(4, 36 + numSamples * 2, true)
+          writeString(8, 'WAVE')
+          writeString(12, 'fmt ')
+          view.setUint32(16, 16, true)
+          view.setUint16(20, 1, true)
+          view.setUint16(22, 1, true)
+          view.setUint32(24, sampleRate, true)
+          view.setUint32(28, sampleRate * 2, true)
+          view.setUint16(32, 2, true)
+          view.setUint16(34, 16, true)
+          writeString(36, 'data')
+          view.setUint32(40, numSamples * 2, true)
+          
+          // Generate silent/quiet waveform data
+          const samples = new Int16Array(buffer, 44)
+          for (let i = 0; i < numSamples; i++) {
+            samples[i] = Math.floor(Math.sin(i * 0.01) * 1000) // Subtle waveform
+          }
+          
+          const blob = new Blob([buffer], { type: 'audio/wav' })
+          const url = URL.createObjectURL(blob)
+          
+          try {
+            await wavesurfer.load(url)
+            setWaveformReady(true)
+            // Clean up blob URL after loading
+            setTimeout(() => URL.revokeObjectURL(url), 1000)
+          } catch {
+            setWaveformReady(true) // Still show UI even if waveform fails
+          }
+        }
       } catch (error) {
         console.warn("Could not generate waveform:", error)
         setWaveformReady(true) // Still show UI even if waveform fails
@@ -158,23 +246,25 @@ export function NowPlayingBubble({
 
     generateDemoWaveform()
 
-    // Update progress
-    const updateProgress = () => {
-      if (wavesurfer && isPlaying) {
-        const duration = wavesurfer.getDuration()
-        if (duration > 0) {
-          const newTime = (progress / 100) * duration
-          wavesurfer.seekTo(progress / 100)
-          setCurrentTime(newTime)
+    // Sync waveform with store progress (when progress changes externally)
+    const syncWaveformProgress = () => {
+      if (wavesurfer && wavesurfer.getDuration() > 0) {
+        const currentWaveformProgress = wavesurfer.getCurrentTime() / wavesurfer.getDuration()
+        const storeProgress = progress / 100
+        
+        // Only update if there's a significant difference (avoid feedback loop)
+        if (Math.abs(currentWaveformProgress - storeProgress) > 0.02) {
+          wavesurfer.seekTo(storeProgress)
+          setCurrentTime(storeProgress * wavesurfer.getDuration())
         }
       }
     }
 
-    updateProgress()
-    const interval = setInterval(updateProgress, 100)
+    // Throttled sync to avoid excessive updates
+    const syncInterval = setInterval(syncWaveformProgress, 200)
 
     // Handle waveform click (seek) - enhanced for fullscreen
-    wavesurfer.on("seek", (seekProgress) => {
+    const unsubscribeSeek = wavesurfer.on("seek", (seekProgress) => {
       const newTime = seekProgress * track.duration_seconds
       setCurrentTime(newTime)
       const newProgress = (seekProgress * 100)
@@ -192,15 +282,30 @@ export function NowPlayingBubble({
     }
 
     return () => {
-      clearInterval(interval)
+      clearInterval(syncInterval)
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
       }
-      wavesurfer.destroy()
+      // Unsubscribe from events using the returned functions
+      if (unsubscribeAudioProcess) {
+        unsubscribeAudioProcess()
+      }
+      if (unsubscribeSeek) {
+        unsubscribeSeek()
+      }
+      // Destroy wavesurfer instance
+      try {
+        wavesurfer.destroy()
+      } catch (error) {
+        console.warn("Error destroying wavesurfer:", error)
+      }
       wavesurferRef.current = null
       analyserRef.current = null
     }
   }, [track, isExpanded, isFullscreen, isPlaying, progress])
+
+  // Responsive positioning - calculate early
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768
 
   // Auto-collapse on inactivity
   useEffect(() => {
@@ -220,28 +325,54 @@ export function NowPlayingBubble({
     }
   }, [isExpanded])
 
-  // Reset timer on interaction
+  // Reset timer on interaction - throttled to prevent excessive state updates
   const handleInteraction = useCallback(() => {
-    if (inactivityTimerRef.current) {
-      clearTimeout(inactivityTimerRef.current)
+    // Only handle interaction if not already expanded/fullscreen and not mobile
+    if (isFullscreen || isMobile) return
+    
+    try {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current)
+      }
+      
+      // Only expand if not already expanded to prevent unnecessary re-renders
+      if (!isExpanded) {
+        setIsExpanded(true)
+      }
+    } catch (error) {
+      console.warn("Error in handleInteraction:", error)
     }
-    setIsExpanded(true)
-  }, [])
+  }, [isExpanded, isFullscreen, isMobile])
 
-  if (!track) {
+  if (isClosed || !track) {
     return null
   }
 
   const totalDuration = track.duration_seconds
   const elapsedTime = currentTime || (progress / 100) * totalDuration
-
-  // Responsive positioning
-  const isMobile = typeof window !== "undefined" && window.innerWidth < 768
   
+  // Check for reduced motion preference
+  const prefersReducedMotion = typeof window !== "undefined" && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  
+  const springTransition = prefersReducedMotion 
+    ? { duration: 0.2 }
+    : { type: "spring", stiffness: 120, damping: 20 }
+
   return (
     <AnimatePresence>
+      {/* Fullscreen backdrop overlay */}
+      {isFullscreen && (
+        <motion.div
+          className="fixed inset-0 bg-gradient-to-b from-black/50 to-transparent z-[99] pointer-events-none"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.4 }}
+        />
+      )}
       <motion.div
         layout
+        layoutId="playerBubble"
         className={`fixed ${
           isFullscreen 
             ? "inset-0 z-[100]" 
@@ -254,12 +385,33 @@ export function NowPlayingBubble({
           width: isFullscreen ? "100%" : isMobile ? "100%" : isExpanded ? "420px" : "320px",
           height: isFullscreen ? "100%" : isMobile ? "auto" : "auto",
           borderRadius: isFullscreen ? "0px" : isMobile ? "24px 24px 0 0" : "24px",
+          scale: isExpanded || isFullscreen ? 1 : 0.95,
+          opacity: 1,
         }}
-        style={{ willChange: "transform" }} // GPU acceleration
-        transition={{ type: "spring", damping: 18, stiffness: 200 }}
-        onMouseEnter={handleInteraction}
-        onMouseMove={handleInteraction}
-        onClick={() => !isExpanded && !isFullscreen && !isMobile && setIsExpanded(true)}
+        style={{ 
+          willChange: "transform, opacity",
+          transform: "translateZ(0)", // GPU acceleration
+        }}
+        transition={springTransition}
+        onMouseEnter={(e) => {
+          e.stopPropagation()
+          handleInteraction()
+        }}
+        onMouseMove={(e) => {
+          e.stopPropagation()
+          // Throttle mouse move to prevent excessive calls (max once per 100ms)
+          const now = Date.now()
+          if (now - lastMouseMoveRef.current > 100) {
+            lastMouseMoveRef.current = now
+            handleInteraction()
+          }
+        }}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (!isExpanded && !isFullscreen && !isMobile) {
+            setIsExpanded(true)
+          }
+        }}
       >
         {/* Fullscreen Dynamic Background with album art */}
         {isFullscreen && (
@@ -299,24 +451,16 @@ export function NowPlayingBubble({
         )}
         
         <motion.div
-          className={`glass shadow-2xl overflow-hidden border border-white/10 backdrop-blur-2xl h-full ${
+          className={`glass shadow-2xl overflow-hidden border border-white/10 backdrop-blur-[18px] bg-[rgba(15,15,25,0.6)] h-full ${
             isExpanded || isFullscreen ? "p-6" : "p-4"
-          } hover:border-white/20 transition-all duration-300 flex flex-col ${
+          } hover:bg-[rgba(20,20,35,0.8)] hover:border-white/20 transition-all duration-300 flex flex-col ${
             isPlaying ? "ring-2 ring-purple-500/50" : ""
           }`}
           style={{
             boxShadow: isPlaying
-              ? `0 0 ${20 + currentAmplitude * 60}px rgba(147, 51, 234, ${0.4 + currentAmplitude * 0.3}), 0 0 ${40 + currentAmplitude * 100}px rgba(34, 211, 238, ${0.2 + currentAmplitude * 0.2}), 0 0 ${80 + currentAmplitude * 120}px rgba(236, 72, 153, ${0.1 + currentAmplitude * 0.15})`
-              : undefined,
+              ? `0 0 15px rgba(168, 85, 247, 0.35), 0 0 ${20 + currentAmplitude * 60}px rgba(147, 51, 234, ${0.4 + currentAmplitude * 0.3}), 0 0 ${40 + currentAmplitude * 100}px rgba(34, 211, 238, ${0.2 + currentAmplitude * 0.2})`
+              : `0 0 15px rgba(168, 85, 247, 0.35)`,
           }}
-          animate={
-            isPlaying
-              ? {
-                  boxShadow: `0 0 ${20 + currentAmplitude * 60}px rgba(147, 51, 234, ${0.4 + currentAmplitude * 0.3}), 0 0 ${40 + currentAmplitude * 100}px rgba(34, 211, 238, ${0.2 + currentAmplitude * 0.2}), 0 0 ${80 + currentAmplitude * 120}px rgba(236, 72, 153, ${0.1 + currentAmplitude * 0.15})`,
-                }
-              : {}
-          }
-          transition={{ duration: 0.1 }}
         >
         {/* Header - Different layout for fullscreen */}
         {isFullscreen ? (
@@ -349,6 +493,7 @@ export function NowPlayingBubble({
                 <p className="text-sm text-white/60">{track.album}</p>
               </div>
             </div>
+            <div className="flex items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
@@ -361,6 +506,18 @@ export function NowPlayingBubble({
             >
               <Minimize2 className="w-5 h-5" />
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-10 w-10 p-0 text-white hover:bg-white/20"
+              onClick={(e) => {
+                e.stopPropagation()
+                setIsClosed(true)
+              }}
+            >
+              <X className="w-5 h-5" />
+            </Button>
+            </div>
           </motion.div>
         ) : (
           <div className="flex items-center justify-between mb-3">
@@ -411,6 +568,18 @@ export function NowPlayingBubble({
                   {isExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                 </Button>
               )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-gray-400 hover:text-white"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsClosed(true)
+                }}
+                aria-label="Close player"
+              >
+                <X className="w-4 h-4" />
+              </Button>
             </div>
           </div>
         )}
@@ -481,8 +650,14 @@ export function NowPlayingBubble({
               className="h-full bg-gradient-to-r from-purple-500 via-pink-500 to-fuchsia-500"
               initial={{ width: 0 }}
               animate={{ width: `${progress}%` }}
-              transition={{ type: "spring", stiffness: 90, damping: 20 }}
-              style={{ willChange: "width" }} // GPU acceleration
+              transition={prefersReducedMotion 
+                ? { duration: 0.1 }
+                : { type: "spring", stiffness: 90, damping: 20 }
+              }
+              style={{ 
+                willChange: "transform",
+                transform: "translateZ(0)", // GPU acceleration
+              }}
             />
           </div>
           <div className="flex justify-between text-xs text-gray-400 mt-1">
@@ -512,35 +687,53 @@ export function NowPlayingBubble({
                 </Button>
               )}
             </div>
-            <div className="relative">
-              {/* Fading gradient overlay at top */}
-              <div className="absolute top-0 left-0 right-0 h-12 bg-gradient-to-b from-background/95 to-transparent pointer-events-none z-10" />
-              {/* Fading gradient overlay at bottom */}
-              <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-background/95 to-transparent pointer-events-none z-10" />
-              <div className={`overflow-y-auto text-gray-300 text-sm leading-relaxed scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent pr-2 scroll-smooth ${
-                isFullscreen ? "h-48 text-center" : "max-h-32"
-              }`}>
+              <div className="relative lyrics-box bg-gradient-to-b from-[rgba(25,25,35,0.85)] to-[rgba(10,10,20,0.9)] text-[rgba(255,255,255,0.85)] p-4 rounded-xl max-h-[200px] overflow-y-auto border border-white/10">
+                <style jsx>{`
+                  .lyrics-box::-webkit-scrollbar {
+                    width: 4px;
+                  }
+                  .lyrics-box::-webkit-scrollbar-thumb {
+                    background-color: rgba(255, 255, 255, 0.2);
+                    border-radius: 10px;
+                  }
+                `}</style>
+                <div className={`text-sm leading-relaxed scroll-smooth ${
+                  isFullscreen ? "h-48 text-center" : "max-h-32"
+                }`} style={{ textShadow: '0 0 5px rgba(255, 255, 255, 0.05)' }}>
                 {isFullscreen && lyricsLines.length > 0 ? (
-                  lyricsLines.map((line, i) => (
-                    <motion.p
-                      key={i}
-                      className={`py-1 transition-all ${
-                        i === currentLyricIndex
-                          ? "text-purple-300 font-medium scale-105"
-                          : "text-gray-400"
-                      }`}
-                      animate={{
-                        opacity: i === currentLyricIndex ? 1 : 0.6,
-                      }}
-                    >
-                      {line || "\u00A0"}
-                    </motion.p>
-                  ))
+                  lyricsLines.map((line, i) => {
+                    const isActive = i === currentLyricIndex
+                    return (
+                      <motion.p
+                        key={i}
+                        className={`py-2 transition-all font-[Inter] ${
+                          isActive
+                            ? "text-purple-300 font-semibold scale-105"
+                            : "text-gray-400"
+                        }`}
+                        animate={{
+                          opacity: isActive ? 1 : 0.4,
+                          y: isActive ? 0 : 10,
+                          scale: isActive ? 1.02 : 1,
+                        }}
+                        transition={{ 
+                          duration: 0.3,
+                          ease: "easeOut"
+                        }}
+                        style={{ 
+                          willChange: "opacity, transform",
+                          transform: "translateZ(0)",
+                        }}
+                      >
+                        {line || "\u00A0"}
+                      </motion.p>
+                    )
+                  })
                 ) : (
                   <p className="whitespace-pre-line">{track.lyrics}</p>
                 )}
+                </div>
               </div>
-            </div>
           </motion.div>
         )}
         

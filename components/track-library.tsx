@@ -57,7 +57,7 @@ export function TrackLibrary({ tracks, playlistTrackIds, onAddTrack, onPlayTrack
   const [search, setSearch] = useState("")
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null)
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<"list" | "grid">("list")
+  const [viewMode, setViewMode] = useState<"list" | "grid">("grid")
 
   const genres = useMemo(() => [...new Set(tracks.map((t) => t.genre))].sort(), [tracks])
   const categories = useMemo(
@@ -199,11 +199,12 @@ export function TrackLibrary({ tracks, playlistTrackIds, onAddTrack, onPlayTrack
               exit={{ opacity: 0 }}
               className="space-y-2"
             >
-              {filtered.map((track) => {
-                const isInPlaylist = playlistTrackIds.has(track.id)
+              {filtered.map((track, idx) => {
+                if (!track) return null
+                const isInPlaylist = playlistTrackIds?.has?.(track.id) || false
                 return (
                   <motion.div
-                    key={track.id}
+                    key={track.id || `track-${idx}`}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.2 }}
@@ -253,14 +254,15 @@ export function TrackLibrary({ tracks, playlistTrackIds, onAddTrack, onPlayTrack
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 min-h-[220px]"
+              className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 min-h-[980px] md:min-h-[1080px] xl:min-h-[1160px]"
             >
               {filtered.map((track, idx) => {
-                const isInPlaylist = playlistTrackIds.has(track.id)
+                if (!track) return null
+                const isInPlaylist = playlistTrackIds?.has?.(track.id) || false
                 const coverUrl = track.coverUrl || "/placeholder.svg"
                 return (
                   <motion.div
-                    key={track.id}
+                    key={track.id || idx}
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ duration: 0.2, delay: idx * 0.03 }}
@@ -273,8 +275,11 @@ export function TrackLibrary({ tracks, playlistTrackIds, onAddTrack, onPlayTrack
                       <div className="relative aspect-square overflow-hidden">
                         <img
                           src={coverUrl}
-                          alt={track.album}
+                          alt={track.album || track.title || "Track cover"}
                           className="w-full h-full object-cover transition-transform group-hover:scale-110"
+                          onError={(e) => {
+                            e.currentTarget.src = "/placeholder.svg"
+                          }}
                         />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                         <Button

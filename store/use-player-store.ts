@@ -15,7 +15,7 @@ interface Track {
   cover_url?: string
 }
 
-interface PlayerState {
+export interface PlayerState {
   currentTrack: Track | null
   isPlaying: boolean
   progress: number

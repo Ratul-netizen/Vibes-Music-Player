@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, memo } from "react"
 import { Button } from "@/components/ui/button"
 import { Shuffle, Repeat, Repeat1, Zap } from "lucide-react"
 
@@ -13,7 +13,7 @@ interface PlaylistControlsProps {
 
 type RepeatMode = "off" | "all" | "one"
 
-export function PlaylistControls({ onShuffle, onRepeat, totalTracks, totalDuration }: PlaylistControlsProps) {
+export const PlaylistControls = memo(function PlaylistControls({ onShuffle, onRepeat, totalTracks, totalDuration }: PlaylistControlsProps) {
   const [repeatMode, setRepeatMode] = useState<RepeatMode>("off")
 
   const handleRepeatClick = () => {
@@ -74,4 +74,4 @@ export function PlaylistControls({ onShuffle, onRepeat, totalTracks, totalDurati
       </div>
     </div>
   )
-}
+})

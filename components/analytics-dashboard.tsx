@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo, Suspense, lazy } from "react"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -13,19 +14,40 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts"
 import { TrendingUp, Calendar, Music } from "lucide-react"
+import { Skeleton } from "@/components/ui/skeleton"
+
+// Lazy load Recharts components
+const ResponsiveContainer = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.ResponsiveContainer }))
+)
+const LineChart = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.LineChart }))
+)
+const Line = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.Line }))
+)
+const XAxis = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.XAxis }))
+)
+const YAxis = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.YAxis }))
+)
+const CartesianGrid = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.CartesianGrid }))
+)
+const Tooltip = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.Tooltip }))
+)
+const PieChart = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.PieChart }))
+)
+const Pie = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.Pie }))
+)
+const Cell = lazy(() => 
+  import("recharts").then(mod => ({ default: mod.Cell }))
+)
 
 export interface PlayHistoryItem {
   id: string
@@ -55,21 +77,105 @@ interface AnalyticsDashboardProps {
 
 const COLORS = ["#a78bfa", "#06b6d4", "#ec4899", "#fbbf24", "#14b8a6"]
 
+// Memoized chart data components for performance
+const ChartSkeleton = () => (
+  <div className="w-full h-[250px] flex items-center justify-center">
+    <Skeleton className="w-full h-full" />
+  </div>
+)
+
+function PlayActivityChart({ data }: { data: Array<{ date: string; count: number }> }) {
+  const memoizedData = useMemo(() => data, [data])
+  
+  return (
+    <ErrorBoundary fallback={<ChartSkeleton />}>
+      <Suspense fallback={<ChartSkeleton />}>
+        <ResponsiveContainer width="100%" height={250}>
+          <LineChart data={memoizedData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" />
+          <XAxis dataKey="date" stroke="rgba(148, 163, 184, 0.5)" />
+          <YAxis stroke="rgba(148, 163, 184, 0.5)" />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "rgba(15, 23, 42, 0.8)",
+              border: "1px solid rgba(148, 163, 184, 0.2)",
+              borderRadius: "8px",
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="count"
+            stroke="#a78bfa"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={true}
+            animationDuration={400}
+          />
+          </LineChart>
+        </ResponsiveContainer>
+      </Suspense>
+    </ErrorBoundary>
+  )
+}
+
+function GenreDistributionChart({ data }: { data: Array<{ name: string; value: number }> }) {
+  const memoizedData = useMemo(() => data, [data])
+  
+  return (
+    <ErrorBoundary fallback={<ChartSkeleton />}>
+      <Suspense fallback={<ChartSkeleton />}>
+        <ResponsiveContainer width="100%" height={250}>
+          <PieChart>
+          <Pie
+            data={memoizedData}
+            cx="50%"
+            cy="50%"
+            labelLine={false}
+            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+            outerRadius={80}
+            fill="#8884d8"
+            dataKey="value"
+            isAnimationActive={true}
+            animationDuration={400}
+          >
+            {COLORS.map((color, idx) => (
+              <Cell key={`cell-${idx}`} fill={color} />
+            ))}
+          </Pie>
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "rgba(15, 23, 42, 0.8)",
+              border: "1px solid rgba(148, 163, 184, 0.2)",
+              borderRadius: "8px",
+            }}
+          />
+          </PieChart>
+        </ResponsiveContainer>
+      </Suspense>
+    </ErrorBoundary>
+  )
+}
+
 export function AnalyticsDashboard({ analytics, history }: AnalyticsDashboardProps) {
   const [timeRange, setTimeRange] = useState<"week" | "month" | "all">("week")
 
-  const formatDuration = (seconds: number) => {
+  const formatDuration = useMemo(() => (seconds: number) => {
     const hours = Math.floor(seconds / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
     if (hours > 0) return `${hours}h ${minutes}m`
     return `${minutes}m`
-  }
+  }, [])
 
-  const formatPlaytime = (seconds: number) => {
+  const formatPlaytime = useMemo(() => (seconds: number) => {
     const hours = Math.floor(seconds / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
     return `${hours}h ${minutes}m`
-  }
+  }, [])
+
+  // Memoize chart data to prevent unnecessary re-renders
+  const memoizedDailyHistory = useMemo(() => analytics.dailyPlayHistory, [analytics.dailyPlayHistory])
+  const memoizedGenreDistribution = useMemo(() => analytics.genreDistribution, [analytics.genreDistribution])
+  const memoizedTopTracks = useMemo(() => analytics.topTracks.slice(0, 5), [analytics.topTracks])
 
   return (
     <Dialog>
@@ -148,7 +254,7 @@ export function AnalyticsDashboard({ analytics, history }: AnalyticsDashboardPro
             <Card className="p-4">
               <h4 className="font-semibold text-sm mb-3">Top Tracks</h4>
               <div className="space-y-2">
-                {analytics.topTracks.slice(0, 5).map((track, idx) => (
+                {memoizedTopTracks.map((track, idx) => (
                   <div key={idx} className="flex items-center justify-between text-sm">
                     <div className="flex-1">
                       <p className="font-medium truncate">{track.title}</p>
@@ -166,57 +272,13 @@ export function AnalyticsDashboard({ analytics, history }: AnalyticsDashboardPro
             {/* Play History Chart */}
             <Card className="p-4">
               <h4 className="font-semibold text-sm mb-3">Play Activity</h4>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={analytics.dailyPlayHistory}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" />
-                  <XAxis dataKey="date" stroke="rgba(148, 163, 184, 0.5)" />
-                  <YAxis stroke="rgba(148, 163, 184, 0.5)" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "rgba(15, 23, 42, 0.8)",
-                      border: "1px solid rgba(148, 163, 184, 0.2)",
-                      borderRadius: "8px",
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="count"
-                    stroke="#a78bfa"
-                    strokeWidth={2}
-                    dot={{ fill: "#a78bfa", r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <PlayActivityChart data={memoizedDailyHistory} />
             </Card>
 
             {/* Genre Distribution */}
             <Card className="p-4">
               <h4 className="font-semibold text-sm mb-3">Genre Distribution</h4>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={analytics.genreDistribution}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {COLORS.map((color, idx) => (
-                      <Cell key={`cell-${idx}`} fill={color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "rgba(15, 23, 42, 0.8)",
-                      border: "1px solid rgba(148, 163, 184, 0.2)",
-                      borderRadius: "8px",
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <GenreDistributionChart data={memoizedGenreDistribution} />
             </Card>
           </TabsContent>
 

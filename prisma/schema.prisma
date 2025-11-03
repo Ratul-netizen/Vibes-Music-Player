@@ -1,0 +1,60 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String? @unique
+  avatar    String?
+  status    String   @default("online") // online, away, offline
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Song {
+  id              String   @id @default(uuid())
+  title           String
+  artist           String
+  album            String?
+  durationSeconds  Int      @map("duration_seconds")
+  genre            String
+  category         String?
+  audioUrl         String?  @map("audio_url")
+  coverUrl         String?  @map("cover_url")
+  lyrics           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("songs")
+  @@index([genre])
+  @@index([category])
+}
+
+model PlaylistTrack {
+  id         String   @id @default(uuid())
+  trackId    String   @map("track_id")
+  position   Float
+  votes      Int      @default(0)
+  addedBy    String   @map("added_by")
+  addedAt    DateTime @default(now()) @map("added_at")
+  isPlaying  Boolean  @default(false) @map("is_playing")
+  playedAt   DateTime? @map("played_at")
+
+  // Relations (optional for this assignment; denormalized access allowed)
+  // song       Song?    @relation(fields: [trackId], references: [id])
+
+  @@map("playlist_tracks")
+  @@index([position])
+}
+

@@ -17,7 +17,7 @@ A real-time collaborative playlist application where multiple users can add, rem
 - **Backend**: Next.js API Routes
 - **Database**: SQLite with better-sqlite3
 - **State Management**: SWR for data fetching and synchronization
-- **Realtime**: Polling-based sync (upgradeable to WebSocket)
+- **Realtime**: WebSocket (Socket.IO) with heartbeat + client reconnection
 
 ## Setup Instructions
 
@@ -38,7 +38,11 @@ docker-compose up --build
 
 The application will be available at `http://localhost:3000`.
 
-The database file (`playlist.db`) will be persisted in the project root directory.
+Realtime WebSocket server: `ws://localhost:4000`
+
+Prisma Studio (visual DB viewer): `http://localhost:5555` (auto-started as a sidecar)
+
+The database file will be persisted in `./data/playlist.db`.
 
 **Docker Commands:**
 - Start containers: `docker-compose up`
@@ -262,11 +266,38 @@ SWR handles client-side caching and automatic synchronization. Server state is t
 npm test
 \`\`\`
 
-Tests cover:
-- Position algorithm correctness
-- Track operations (add, remove, vote)
-- Playlist ordering and reordering
-- Error handling
+Includes unit tests for the position algorithm with dense insertion edge cases.
+
+## Demo / Multi-window Sync
+
+Open two browser windows side by side and perform:
+- Add a track from the library → appears in both windows within ~1s
+- Vote on a track → counts update in both windows
+- Reorder by dragging → order updates in both windows
+- Set Now Playing → the player bubble updates across windows
+
+## Architecture Overview
+
+- Next.js App Router for UI + API Routes for simple endpoints
+- Socket.IO Node server (server.js) for realtime events
+  - Broadcasts: `track:added`, `track:removed`, `track:reordered`, `track:voted`, `track:playing`
+  - Heartbeat: emits `{ type: "ping", ts }` every 15s
+- Client emits the same events after local optimistic updates
+- Fractional-position ordering stored in memory (or DB when enabled)
+
+## Trade-offs & Decisions
+
+- Chose a lightweight Socket.IO server to simplify local demo instead of a full REST+WS backend
+- Optimistic UI first; server authoritative on refresh
+- Position stored as fractional numbers for O(1) reorder, avoiding reindexing
+- Minimal test suite focused on algorithm correctness given time constraints
+
+## If I Had 2 More Days (delta)
+
+- Add API-backed playlist persistence with Prisma models (PlaylistTrack)
+- Broadcast from server after DB writes (source-of-truth on server)
+- Integration tests for realtime events; Playwright E2E for multi-window behavior
+- Virtualized list for 200+ items; throttle reorder messages
 
 ## Troubleshooting
 

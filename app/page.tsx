@@ -1,8 +1,6 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useCallback, useRef, useEffect } from "react"
+import { useState, useCallback, useRef, useEffect, type DragEvent } from "react"
 import { TrackLibrary } from "@/components/track-library"
 import { PlaylistTrackComponent } from "@/components/playlist-track"
 import { NowPlaying } from "@/components/now-playing"
@@ -23,12 +21,13 @@ import { PresenceIndicator } from "@/components/presence-indicator"
 import { SettingsPanel, type UserSettings } from "@/components/settings-panel"
 import { AnalyticsDashboard, type Analytics, type PlayHistoryItem } from "@/components/analytics-dashboard"
 import { useWebSocket } from "@/hooks/use-websocket"
+import { socket } from "@/lib/socket"
 import { getPersistentState, setPersistentState } from "@/lib/persisted-state"
 import { EqualizerVisualizer } from "@/components/equalizer-visualizer"
 import { AlbumArtDisplay } from "@/components/album-art-display"
 import { useSwipe } from "@/hooks/use-swipe"
 import { ShareDialog } from "@/components/share-dialog"
-import { usePlayerStore } from "@/store/use-player-store"
+import { usePlayerStore, type PlayerState } from "@/store/use-player-store"
 import { motion } from "framer-motion"
 
 interface Track {
@@ -59,6 +58,8 @@ interface PlaylistItem {
 
 export default function Home() {
   const { isConnected } = useWebSocket()
+  // Respect env flag to disable websocket UI if not desired
+  const wsEnabled = process.env.NEXT_PUBLIC_WS_ENABLED !== "false"
   const { currentTrack, isPlaying: storeIsPlaying, setProgress } = usePlayerStore()
   const [tracks, setTracks] = useState<Track[]>([])
   const [tracksLoading, setTracksLoading] = useState(true)
@@ -108,7 +109,7 @@ export default function Home() {
   const [typingUser, setTypingUser] = useState<string>()
   const [showChat, setShowChat] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-  const playbackProgress = usePlayerStore((state) => state.progress)
+  const playbackProgress = usePlayerStore((state: PlayerState) => state.progress)
 
   const [history, setHistory] = useState<PlayHistoryItem[]>([
     {
@@ -204,7 +205,7 @@ export default function Home() {
     fetchTracks()
   }, [])
 
-  const playlistTrackIds = new Set<string>(playlist.map((item) => item.track_id))
+  const playlistTrackIds = new Set<string>(playlist.map((item: PlaylistItem) => item.track_id))
 
   useEffect(() => {
     const root = document.documentElement
@@ -223,11 +224,11 @@ export default function Home() {
         type: "message",
       }
 
-      setMessages((prev) => [...prev, newMessage])
+      setMessages((prev: Message[]) => [...prev, newMessage])
 
       if (Math.random() > 0.6) {
         setTimeout(() => {
-          const otherUsers = users.filter((u) => u.id !== currentUser.id && u.status === "online")
+          const otherUsers = users.filter((u: User) => u.id !== currentUser.id && u.status === "online")
           if (otherUsers.length > 0) {
             const randomUser = otherUsers[Math.floor(Math.random() * otherUsers.length)]
             setIsTyping(true)
@@ -242,7 +243,7 @@ export default function Home() {
                 timestamp: new Date(),
                 type: "message",
               }
-              setMessages((prev) => [...prev, response])
+              setMessages((prev: Message[]) => [...prev, response])
               setIsTyping(false)
             }, 1500)
           }
@@ -254,18 +255,26 @@ export default function Home() {
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const isTyping = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
       if (e.code === "Space") {
-        e.preventDefault()
+        if (!isTyping) {
+          e.preventDefault()
+        }
       } else if (e.code === "ArrowRight") {
-        handleSkipToNext()
+        if (!isTyping) handleSkipToNext()
       } else if (e.code === "ArrowLeft") {
-        handleSkipToPrevious()
+        if (!isTyping) handleSkipToPrevious()
       } else if (e.ctrlKey && e.key === "s") {
-        e.preventDefault()
-        handleExportPlaylist()
+        if (!isTyping) {
+          e.preventDefault()
+          handleExportPlaylist()
+        }
       } else if (e.ctrlKey && e.key === "/") {
-        e.preventDefault()
-        handleShuffle()
+        if (!isTyping) {
+          e.preventDefault()
+          handleShuffle()
+        }
       }
     }
 
@@ -275,8 +284,8 @@ export default function Home() {
 
   const handleAddTrack = useCallback(
     (track: Track) => {
-      setPlaylist((prev) => {
-        const alreadyAdded = prev.some((item) => item.track_id === track.id)
+      setPlaylist((prev: PlaylistItem[]) => {
+        const alreadyAdded = prev.some((item: PlaylistItem) => item.track_id === track.id)
         if (alreadyAdded) {
           setError("Track is already in the playlist")
           return prev
@@ -286,7 +295,7 @@ export default function Home() {
           id: `p${playlistIdRef.current++}`,
           track_id: track.id,
           track,
-          position: Math.max(...prev.map((p) => p.position), 0) + 1,
+          position: Math.max(...prev.map((p: PlaylistItem) => p.position), 0) + 1,
           votes: 0,
           added_by: "User",
           added_at: new Date().toISOString(),
@@ -298,18 +307,20 @@ export default function Home() {
       })
 
       handleSendMessage(`Added "${track.title}" by ${track.artist} to the queue!`)
+      try { (socket as any).emit("track:add", { item: track }) } catch {}
     },
     [handleSendMessage],
   )
 
   const handleRemoveTrack = useCallback((id: string) => {
-    setPlaylist((prev) => prev.filter((item) => item.id !== id))
+    setPlaylist((prev: PlaylistItem[]) => prev.filter((item: PlaylistItem) => item.id !== id))
+    try { (socket as any).emit("track:remove", { id }) } catch {}
   }, [])
 
   const handleVote = useCallback(
     (id: string, direction: "up" | "down") => {
-      setPlaylist((prev) =>
-        prev.map((item) =>
+      setPlaylist((prev: PlaylistItem[]) =>
+        prev.map((item: PlaylistItem) =>
           item.id === id
             ? {
                 ...item,
@@ -318,12 +329,13 @@ export default function Home() {
             : item,
         ),
       )
+      try { (socket as any).emit("track:vote", { id, direction }) } catch {}
 
-      setAnalytics((prev) => ({
+      setAnalytics((prev: Analytics) => ({
         ...prev,
         averageVotesPerTrack:
           prev.totalTracksPlayed > 0
-            ? (playlist.reduce((sum, item) => sum + Math.abs(item.votes), 0) + 1) / prev.totalTracksPlayed
+            ? (playlist.reduce((sum: number, item: PlaylistItem) => sum + Math.abs(item.votes), 0) + 1) / prev.totalTracksPlayed
             : 0,
       }))
     },
@@ -332,15 +344,15 @@ export default function Home() {
 
   const handleToggleFavorite = useCallback(
     (id: string) => {
-      setPlaylist((prev) => prev.map((item) => (item.id === id ? { ...item, is_favorite: !item.is_favorite } : item)))
+      setPlaylist((prev: PlaylistItem[]) => prev.map((item: PlaylistItem) => (item.id === id ? { ...item, is_favorite: !item.is_favorite } : item)))
 
-      setFavorites((prev) => {
-        const item = playlist.find((p) => p.id === id)
+      setFavorites((prev: PlaylistItem[]) => {
+        const item = playlist.find((p: PlaylistItem) => p.id === id)
         if (!item) return prev
 
-        const isFavorited = prev.some((p) => p.id === id)
+        const isFavorited = prev.some((p: PlaylistItem) => p.id === id)
         if (isFavorited) {
-          return prev.filter((p) => p.id !== id)
+          return prev.filter((p: PlaylistItem) => p.id !== id)
         } else {
           return [...prev, item]
         }
@@ -349,12 +361,12 @@ export default function Home() {
     [playlist],
   )
 
-  const handleDragStart = (item: PlaylistItem) => (e: React.DragEvent) => {
+  const handleDragStart = (item: PlaylistItem) => (e: DragEvent) => {
     setDraggedItem(item)
     e.dataTransfer.effectAllowed = "move"
   }
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: DragEvent) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = "move"
   }
@@ -363,13 +375,13 @@ export default function Home() {
     if (!draggedItem) return
     if (draggedItem.id === targetItem?.id) return
 
-    setPlaylist((prev) => {
-      const sorted = [...prev].sort((a, b) => a.position - b.position)
-      const draggedIndex = sorted.findIndex((item) => item.id === draggedItem.id)
+    setPlaylist((prev: PlaylistItem[]) => {
+      const sorted = [...prev].sort((a: PlaylistItem, b: PlaylistItem) => a.position - b.position)
+      const draggedIndex = sorted.findIndex((item: PlaylistItem) => item.id === draggedItem.id)
 
       let targetIndex = -1
       if (targetItem) {
-        targetIndex = sorted.findIndex((item) => item.id === targetItem.id)
+        targetIndex = sorted.findIndex((item: PlaylistItem) => item.id === targetItem.id)
         if (isAfter) targetIndex++
       } else {
         targetIndex = sorted.length
@@ -380,25 +392,26 @@ export default function Home() {
         return prev
       }
 
-      const newPlaylist = prev.filter((item) => item.id !== draggedItem.id)
-      const insertIndex = newPlaylist.findIndex((item) => sorted[targetIndex]?.id && item.id === sorted[targetIndex].id)
+      const newPlaylist = prev.filter((item: PlaylistItem) => item.id !== draggedItem.id)
+      const insertIndex = newPlaylist.findIndex((item: PlaylistItem) => sorted[targetIndex]?.id && item.id === sorted[targetIndex].id)
       const finalIndex = insertIndex >= 0 ? (isAfter ? insertIndex + 1 : insertIndex) : newPlaylist.length
 
       newPlaylist.splice(finalIndex, 0, draggedItem)
 
-      return newPlaylist.map((item, idx) => ({
+      return newPlaylist.map((item: PlaylistItem, idx: number) => ({
         ...item,
         position: idx + 1,
       }))
     })
 
     setDraggedItem(null)
+    try { (socket as any).emit("track:reorder", { id: draggedItem.id }) } catch {}
   }
 
   const handleSetPlaying = useCallback(
     (id: string) => {
-      setPlaylist((prev) =>
-        prev.map((item) => ({
+      setPlaylist((prev: PlaylistItem[]) =>
+        prev.map((item: PlaylistItem) => ({
           ...item,
           is_playing: item.id === id,
         })),
@@ -406,10 +419,11 @@ export default function Home() {
       setIsPlaying(true)
       setProgress(0)
 
-      const playingTrack = playlist.find((item) => item.id === id)
+      const playingTrack = playlist.find((item: PlaylistItem) => item.id === id)
       if (playingTrack) {
         usePlayerStore.getState().setTrack(playingTrack.track)
-        setHistory((prev) => [
+        try { (socket as any).emit("track:playing", { id }) } catch {}
+        setHistory((prev: PlayHistoryItem[]) => [
           {
             id: `h${Date.now()}`,
             title: playingTrack.track.title,
@@ -427,16 +441,16 @@ export default function Home() {
 
   const handleTogglePlay = useCallback(() => {
     usePlayerStore.getState().togglePlay()
-    setIsPlaying((prev) => !prev)
+    setIsPlaying((prev: boolean) => !prev)
   }, [])
 
   const handleSkipToNext = useCallback(() => {
-    setPlaylist((prev) => {
-      const sorted = [...prev].sort((a, b) => a.position - b.position)
-      const currentIndex = sorted.findIndex((item) => item.is_playing)
+    setPlaylist((prev: PlaylistItem[]) => {
+      const sorted = [...prev].sort((a: PlaylistItem, b: PlaylistItem) => a.position - b.position)
+      const currentIndex = sorted.findIndex((item: PlaylistItem) => item.is_playing)
       const nextIndex = (currentIndex + 1) % sorted.length
 
-      return sorted.map((item) => ({
+      return sorted.map((item: PlaylistItem) => ({
         ...item,
         is_playing: item.id === sorted[nextIndex].id,
       }))
@@ -468,12 +482,12 @@ export default function Home() {
   }, [storeIsPlaying, currentTrack, handleSkipToNext, setProgress])
 
   const handleSkipToPrevious = useCallback(() => {
-    setPlaylist((prev) => {
-      const sorted = [...prev].sort((a, b) => a.position - b.position)
-      const currentIndex = sorted.findIndex((item) => item.is_playing)
+    setPlaylist((prev: PlaylistItem[]) => {
+      const sorted = [...prev].sort((a: PlaylistItem, b: PlaylistItem) => a.position - b.position)
+      const currentIndex = sorted.findIndex((item: PlaylistItem) => item.is_playing)
       const prevIndex = (currentIndex - 1 + sorted.length) % sorted.length
 
-      return sorted.map((item) => ({
+      return sorted.map((item: PlaylistItem) => ({
         ...item,
         is_playing: item.id === sorted[prevIndex].id,
       }))
@@ -481,9 +495,9 @@ export default function Home() {
   }, [])
 
   const handleShuffle = useCallback(() => {
-    setPlaylist((prev) => {
+    setPlaylist((prev: PlaylistItem[]) => {
       const shuffled = [...prev].sort(() => Math.random() - 0.5)
-      return shuffled.map((item, idx) => ({
+      return shuffled.map((item: PlaylistItem, idx: number) => ({
         ...item,
         position: idx + 1,
       }))
@@ -523,13 +537,13 @@ export default function Home() {
     setError(null)
   }, [playlist])
 
-  const totalDuration = playlist.reduce((sum, item) => sum + item.track.duration_seconds, 0)
-  const totalVotes = playlist.reduce((sum, item) => sum + item.votes, 0)
+  const totalDuration = playlist.reduce((sum: number, item: PlaylistItem) => sum + item.track.duration_seconds, 0)
+  const totalVotes = playlist.reduce((sum: number, item: PlaylistItem) => sum + item.votes, 0)
   const averageRating = playlist.length > 0 ? totalVotes / playlist.length : 0
   const mostVotedTrack =
-    playlist.length > 0 ? playlist.reduce((max, item) => (item.votes > max.votes ? item : max)).track.title : null
+    playlist.length > 0 ? playlist.reduce((max: PlaylistItem, item: PlaylistItem) => (item.votes > max.votes ? item : max)).track.title : null
 
-  const sortedPlaylist = [...playlist].sort((a, b) => {
+  const sortedPlaylist = [...playlist].sort((a: PlaylistItem, b: PlaylistItem) => {
     switch (sortBy) {
       case "votes":
         return b.votes - a.votes
@@ -543,7 +557,7 @@ export default function Home() {
     }
   })
 
-  const currentlyPlaying = playlist.find((item) => item.is_playing) || null
+  const currentlyPlaying = playlist.find((item: PlaylistItem) => item.is_playing) || null
 
   // Sync playlist state with player store
   useEffect(() => {
@@ -562,9 +576,13 @@ export default function Home() {
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
       // Ctrl+/ or Cmd+/ to toggle chat
-      if ((e.ctrlKey || e.metaKey) && e.key === "/") {
-        e.preventDefault()
-        setShowChat((prev) => !prev)
+      const target = e.target as HTMLElement | null
+      const isTyping = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      if (!isTyping) {
+        if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+          e.preventDefault()
+          setShowChat((prev: boolean) => !prev)
+        }
       }
       // Esc to close chat
       if (e.key === "Escape" && showChat) {
@@ -576,26 +594,46 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleKeyPress)
   }, [showChat])
 
-  const connectionIndicator = isConnected ? (
+  const connectionIndicator = !wsEnabled ? null : isConnected ? (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.3 }}
       className="flex items-center gap-2 text-xs text-green-500"
     >
       <div className="relative">
         <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-        <div className="absolute inset-0 w-2 h-2 rounded-full bg-green-500 animate-ping opacity-75" />
+        <motion.div
+          className="absolute inset-0 w-2 h-2 rounded-full bg-green-500"
+          animate={{ 
+            scale: [1, 1.5, 1],
+            opacity: [0.75, 0, 0.75]
+          }}
+          transition={{ 
+            duration: 2,
+            repeat: Infinity,
+            ease: "easeInOut"
+          }}
+        />
       </div>
       <span>Connected</span>
-      <div className="absolute left-0 top-0 w-full h-full bg-green-500/20 blur-xl pointer-events-none" />
     </motion.div>
   ) : (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.3 }}
       className="flex items-center gap-2 text-xs text-yellow-500"
     >
-      <div className="w-2 h-2 rounded-full bg-yellow-500" />
+      <motion.div
+        className="w-2 h-2 rounded-full bg-yellow-500"
+        animate={{ opacity: [1, 0.5, 1] }}
+        transition={{ 
+          duration: 1.5,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+      />
       <span>Offline Mode</span>
     </motion.div>
   )
@@ -619,7 +657,7 @@ export default function Home() {
               {connectionIndicator}
             </div>
             <div className="flex items-center gap-3">
-              <PresenceIndicator isLive={true} userCount={users.filter((u) => u.status === "online").length} />
+              <PresenceIndicator isLive={true} userCount={users.filter((u: User) => u.status === "online").length} />
               <Button
                 size="sm"
                 variant={showChat ? "default" : "outline"}
@@ -636,8 +674,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Main Content Area - Fully Scrollable */}
-        <div className="flex-1 overflow-y-auto px-6 pb-40 scroll-smooth">
+        {/* Main Content Area */}
+        <div className="flex-1 min-h-0 px-6 pb-12 lg:pb-16 overflow-y-auto">
           {/* Music Banner */}
           <div className="shrink-0 pt-6 mb-6">
             <MusicBanner />
@@ -693,14 +731,14 @@ export default function Home() {
                 tracks={tracks}
                 playlistTrackIds={playlistTrackIds}
                 onAddTrack={handleAddTrack}
-                onPlayTrack={(track) => {
-                  const existingItem = playlist.find((item) => item.track_id === track.id)
+                onPlayTrack={(track: Track) => {
+                  const existingItem = playlist.find((item: PlaylistItem) => item.track_id === track.id)
                   if (existingItem) {
                     handleSetPlaying(existingItem.id)
                   } else {
                     handleAddTrack(track)
                     setTimeout(() => {
-                      const newItem = playlist.find((item) => item.track_id === track.id)
+                      const newItem = playlist.find((item: PlaylistItem) => item.track_id === track.id)
                       if (newItem) handleSetPlaying(newItem.id)
                     }, 100)
                   }
@@ -713,7 +751,7 @@ export default function Home() {
 
         {/* Desktop layout */}
         {!isMobile && (
-          <div className="h-full grid grid-cols-12 gap-6 overflow-hidden">
+          <div className="h-full min-h-0 grid grid-cols-12 gap-6">
             <div className="col-span-3 flex flex-col gap-4 overflow-y-auto h-full scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent pr-2">
               <PlaylistControls
                 onShuffle={handleShuffle}
@@ -731,28 +769,28 @@ export default function Home() {
                 <PlaylistFavorites
                   favorites={favorites}
                   onAddFavorite={() => {}}
-                  onRemoveFavorite={(id) => {
-                    setFavorites((prev) => prev.filter((p) => p.id !== id))
+                  onRemoveFavorite={(id: string) => {
+                    setFavorites((prev: PlaylistItem[]) => prev.filter((p: PlaylistItem) => p.id !== id))
                   }}
                 />
               )}
               <UserPresence users={users} currentUserId={currentUser.id} />
             </div>
 
-            <div className={`${showChat ? "col-span-6" : "col-span-9"} flex flex-col gap-4 overflow-hidden`}>
-              <div className="glass p-4 rounded-lg overflow-hidden flex flex-col h-auto">
+            <div className={`${showChat ? "col-span-6" : "col-span-9"} flex flex-col gap-4 min-h-0`}>
+              <div className="glass p-4 rounded-lg overflow-hidden flex flex-col flex-9 min-h-0">
                 <TrackLibrary
                   tracks={tracks}
                   playlistTrackIds={playlistTrackIds}
                   onAddTrack={handleAddTrack}
-                  onPlayTrack={(track) => {
-                    const existingItem = playlist.find((item) => item.track_id === track.id)
+                  onPlayTrack={(track: Track) => {
+                    const existingItem = playlist.find((item: PlaylistItem) => item.track_id === track.id)
                     if (existingItem) {
                       handleSetPlaying(existingItem.id)
                     } else {
                       handleAddTrack(track)
                       setTimeout(() => {
-                        const newItem = playlist.find((item) => item.track_id === track.id)
+                        const newItem = playlist.find((item: PlaylistItem) => item.track_id === track.id)
                         if (newItem) handleSetPlaying(newItem.id)
                       }, 100)
                     }
@@ -761,7 +799,7 @@ export default function Home() {
                 />
               </div>
 
-              <div className="flex-1 flex flex-col gap-4 overflow-hidden min-h-0">
+              <div className="flex-3 flex flex-col gap-4 overflow-hidden min-h-0">
 
                 <PlaylistAdvancedMenu
                   playlist={sortedPlaylist}
@@ -769,25 +807,25 @@ export default function Home() {
                   onExportPlaylist={handleExportPlaylist}
                 />
 
-                <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 flex flex-col overflow-hidden min-h-[320px] md:min-h-[380px] lg:min-h-[420px]">
                   <h2 className="text-lg font-bold mb-3">Queue ({sortedPlaylist.length})</h2>
                   <div
-                    className="flex-1 space-y-2 overflow-y-auto"
+                    className="flex-1 overflow-y-auto max-h-[50vh] space-y-2 pr-2 scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent"
                     onDragOver={handleDragOver}
-                    onDrop={(e) => {
+                    onDrop={(e: DragEvent) => {
                       e.preventDefault()
                       handleDropBetween(null, false)
                     }}
                   >
-                    {sortedPlaylist.map((item) => (
+                    {sortedPlaylist.map((item: PlaylistItem) => (
                       <div
                         key={item.id}
                         className="relative group"
-                        onDragOver={(e) => {
+                        onDragOver={(e: DragEvent) => {
                           e.preventDefault()
                           e.dataTransfer.dropEffect = "move"
                         }}
-                        onDrop={(e) => {
+                        onDrop={(e: DragEvent) => {
                           e.preventDefault()
                           handleDropBetween(item, false)
                         }}

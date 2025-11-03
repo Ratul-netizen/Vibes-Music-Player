@@ -23,12 +23,28 @@ class SocketClient {
   private url: string
 
   constructor() {
-    // Use environment variable or fallback to localhost for development
-    this.url = process.env.NEXT_PUBLIC_WS_URL || "http://localhost:4000"
+    // Check if WebSocket is disabled via environment variable
+    const wsEnabled = process.env.NEXT_PUBLIC_WS_ENABLED !== "false"
     
-    // Initialize socket connection
+    if (!wsEnabled) {
+      console.log("[Socket] WebSocket disabled - running in offline mode")
+      return
+    }
+
+    // Use environment variable or fallback - dynamically choose based on environment
+    const defaultUrl = typeof window !== "undefined" && window.location.hostname === "localhost"
+      ? "http://localhost:4000"
+      : process.env.NEXT_PUBLIC_SOCKET_URL || process.env.NEXT_PUBLIC_WS_URL || "http://localhost:4000"
+    
+    this.url = defaultUrl
+    
+    // Don't auto-connect - let components decide when to connect
+    // This prevents errors when server is not available
     if (typeof window !== "undefined") {
-      this.connect()
+      // Delay connection to allow app to load first and prevent initial connection spam
+      setTimeout(() => {
+        this.connect()
+      }, 2000) // Increased delay to 2 seconds
     }
   }
 
@@ -39,28 +55,75 @@ class SocketClient {
       this.socket = io(this.url, {
         transports: ["websocket", "polling"],
         reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
+        reconnectionAttempts: 5, // Limit attempts instead of infinite
+        reconnectionDelay: 3000, // Start with 3 seconds
+        reconnectionDelayMax: 10000, // Max 10 seconds between attempts
+        timeout: 5000, // Shorter timeout
+        autoConnect: true,
+        // Suppress error logs
+        forceNew: false,
       })
 
+      // Suppress Socket.IO verbose logging
+      if (this.socket.io) {
+        this.socket.io.on("error", () => {
+          // Silently handle connection errors - don't spam console
+        })
+      }
+
       this.socket.on("connect", () => {
-        console.log("[Socket] Connected to server")
+        console.log("[Socket] ✓ Connected to server")
         this.isConnected = true
         this.emit("connect")
       })
 
       this.socket.on("disconnect", (reason) => {
-        console.log("[Socket] Disconnected:", reason)
+        // Only log disconnects if we were previously connected
+        if (this.isConnected) {
+          console.log("[Socket] Disconnected:", reason)
+        }
         this.isConnected = false
         this.emit("disconnect")
       })
 
-      this.socket.on("connect_error", (error) => {
-        console.warn("[Socket] Connection error:", error)
-        // Fallback to mock mode if server is not available
+      this.socket.on("reconnect", (attemptNumber) => {
+        console.log("[Socket] ✓ Reconnected after", attemptNumber, "attempts")
+        this.isConnected = true
+        this.emit("connect")
+      })
+
+      // Suppress reconnection attempt logs - they're too verbose
+      this.socket.on("reconnect_attempt", () => {
+        // Silently attempt reconnection
+      })
+
+      this.socket.on("reconnect_error", () => {
+        // Silently handle reconnection errors - don't spam console
+        this.isConnected = false
+      })
+
+      this.socket.on("reconnect_failed", () => {
+        // Only log once when all attempts failed
         if (!this.isConnected) {
-          this.isConnected = true // Simulate connection for demo
-          this.emit("connect")
+          console.warn("[Socket] Server unavailable - running in offline mode")
+          this.isConnected = false
+          // Disable further reconnection attempts
+          this.socket?.disconnect()
+          this.socket = null
+        }
+      })
+
+      this.socket.on("connect_error", () => {
+        // Silently handle connection errors - don't spam console
+        this.isConnected = false
+        // After multiple failed attempts, stop trying
+        if (this.socket && !this.socket.connected) {
+          setTimeout(() => {
+            if (this.socket && !this.socket.connected) {
+              this.socket.disconnect()
+              this.socket = null
+            }
+          }, 5000)
         }
       })
 
@@ -72,10 +135,8 @@ class SocketClient {
         }
       })
     } catch (error) {
-      console.warn("[Socket] Failed to initialize, using mock mode:", error)
-      // Fallback to mock mode
-      this.isConnected = true
-      this.emit("connect")
+      // Silently handle initialization errors
+      this.isConnected = false
     }
   }
 
