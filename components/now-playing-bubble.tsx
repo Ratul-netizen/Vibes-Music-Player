@@ -34,7 +34,7 @@ export function NowPlayingBubble({
   const wavesurferRef = useRef<WaveSurfer | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationFrameRef = useRef<number | null>(null)
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isClosed, setIsClosed] = useState(false)
   const [volume, setVolume] = useState(1)
@@ -303,6 +303,19 @@ export function NowPlayingBubble({
       analyserRef.current = null
     }
   }, [track, isExpanded, isFullscreen, isPlaying, progress])
+
+  // Sync wavesurfer playback state with store (ensures visible animation)
+  useEffect(() => {
+    const ws = wavesurferRef.current
+    if (!ws) return
+    try {
+      if (isPlaying) {
+        ws.play()
+      } else {
+        ws.pause()
+      }
+    } catch {}
+  }, [isPlaying])
 
   // Responsive positioning - calculate early
   const isMobile = typeof window !== "undefined" && window.innerWidth < 768
@@ -594,9 +607,9 @@ export function NowPlayingBubble({
           >
             <div 
               ref={waveformRef} 
-              className="w-full bg-white/5 backdrop-blur-xl rounded-lg p-4 cursor-pointer" 
+              className="w-full bg-white/5 backdrop-blur-xl rounded-lg p-2 md:p-3 cursor-pointer" 
               style={{ 
-                minHeight: isFullscreen ? "200px" : "80px",
+                minHeight: isFullscreen ? "200px" : "72px",
                 willChange: "contents" // GPU acceleration
               }}
               onClick={(e) => {
@@ -666,8 +679,8 @@ export function NowPlayingBubble({
           </div>
         </motion.div>
 
-        {/* Lyrics display - Enhanced for fullscreen */}
-        {track.lyrics && (isExpanded || isFullscreen) && showLyrics && (
+        {/* Lyrics display - Enhanced for fullscreen (always show box; placeholder if missing) */}
+        {(isExpanded || isFullscreen) && showLyrics && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -729,8 +742,10 @@ export function NowPlayingBubble({
                       </motion.p>
                     )
                   })
-                ) : (
+                ) : track?.lyrics ? (
                   <p className="whitespace-pre-line">{track.lyrics}</p>
+                ) : (
+                  <p className="text-gray-400">No lyrics available for this track.</p>
                 )}
                 </div>
               </div>
@@ -738,7 +753,7 @@ export function NowPlayingBubble({
         )}
         
         {/* Show Lyrics toggle for fullscreen */}
-        {isFullscreen && track.lyrics && !showLyrics && (
+        {isFullscreen && (!showLyrics) && (
           <div className="mb-4 text-center">
             <Button
               variant="ghost"

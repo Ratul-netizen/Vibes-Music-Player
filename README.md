@@ -197,7 +197,7 @@ Insert between 1.0 and 1.5: [1.0, 1.25, 1.5, 2.0, 3.0]
 - ✓ Drag-and-drop reordering with fractional positions
 - ✓ Voting system (upvote/downvote)
 - ✓ Now Playing indicator with simulated playback
-- ✓ Real-time synchronization (polling-based)
+- ✓ Real-time synchronization with Socket.IO (heartbeat + cross-tab)
 - ✓ Track library with search and genre filtering
 - ✓ Responsive UI with Tailwind CSS
 - ✓ Position algorithm with comprehensive tests

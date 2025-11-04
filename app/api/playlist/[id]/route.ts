@@ -1,57 +1,41 @@
-import { getDb } from "@/lib/db"
+import { PrismaClient } from "@prisma/client"
 import { broadcastEvent } from "@/lib/events"
+
+const prisma = new PrismaClient()
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
     const { position, is_playing } = await req.json()
 
-    const db = getDb()
-
     if (is_playing) {
-      // Only one track can be playing
-      db.prepare("UPDATE playlist_tracks SET is_playing = 0").run()
+      await prisma.playlistTrack.updateMany({ data: { isPlaying: false } } as any)
     }
 
-    const updates: string[] = []
-    const values: any[] = []
-
-    if (position !== undefined) {
-      updates.push("position = ?")
-      values.push(position)
-    }
-
-    if (is_playing !== undefined) {
-      updates.push("is_playing = ?")
-      values.push(is_playing ? 1 : 0)
-    }
-
-    if (updates.length === 0) {
+    const updateData: any = {}
+    if (position !== undefined) updateData.position = position
+    if (is_playing !== undefined) updateData.isPlaying = !!is_playing
+    if (Object.keys(updateData).length === 0) {
       return Response.json({ error: "No updates provided" }, { status: 400 })
     }
 
-    values.push(id)
+    await prisma.playlistTrack.update({ where: { id }, data: updateData } as any)
 
-    db.prepare(`UPDATE playlist_tracks SET ${updates.join(", ")} WHERE id = ?`).run(...values)
-
-    // Get updated item
-    const updated = db
-      .prepare(
-        `SELECT pt.*, t.title, t.artist, t.album, t.duration_seconds, t.genre, t.cover_url
-        FROM playlist_tracks pt
-        JOIN tracks t ON pt.track_id = t.id
-        WHERE pt.id = ?`,
-      )
-      .get(id) as any
+    const rows = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT pt.id, pt.track_id as trackId, pt.position, pt.votes, pt.added_by as addedBy,
+              pt.added_at as addedAt, pt.is_playing as isPlaying
+       FROM playlist_tracks pt WHERE pt.id = ?`,
+      id,
+    )
 
     const formatted = {
-      id: updated.id,
-      track_id: updated.track_id,
-      position: updated.position,
-      votes: updated.votes,
-      added_by: updated.added_by,
-      added_at: updated.added_at,
-      is_playing: updated.is_playing === 1,
+      id: rows[0].id,
+      track_id: rows[0].trackId,
+      position: rows[0].position,
+      votes: rows[0].votes,
+      added_by: rows[0].addedBy,
+      added_at: rows[0].addedAt,
+      is_playing: !!rows[0].isPlaying,
     }
 
     if (is_playing) {
@@ -71,8 +55,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   try {
     const { id } = await params
 
-    const db = getDb()
-    db.prepare("DELETE FROM playlist_tracks WHERE id = ?").run(id)
+    await prisma.playlistTrack.delete({ where: { id } } as any)
 
     broadcastEvent({ type: "track.removed", id })
 

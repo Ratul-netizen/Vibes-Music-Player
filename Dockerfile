@@ -39,10 +39,10 @@ ENV NODE_ENV production
 # Set DATABASE_URL for Prisma (needed for generation during build)
 ENV DATABASE_URL="file:/app/playlist.db"
 
-# Generate Prisma Client, apply migrations, and seed (bakes DB into image)
+# Generate Prisma Client, push schema (works without migrations), and seed (bakes DB into image)
 RUN if [ -f "prisma/schema.prisma" ]; then \
       echo "Generating Prisma Client..." && pnpm prisma generate && \
-      echo "Applying migrations..." && pnpm exec prisma migrate deploy && \
+      echo "Pushing schema to SQLite..." && pnpm exec prisma db push --accept-data-loss && \
       echo "Seeding database..." && pnpm run db:seed || true ; \
     else echo "No Prisma schema found" ; fi
 
@@ -69,6 +69,8 @@ COPY --from=builder /app/public ./public
 # Copy standalone output
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Also copy production node_modules so custom server (server.js) can require its deps (e.g., socket.io)
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 
 # Copy pre-seeded database into image and prepare startup script to hydrate volume
 RUN mkdir -p /app/data /app/.seed
@@ -77,14 +79,22 @@ COPY --from=builder /app/playlist.db /app/.seed/playlist.db
 # Create directory for database with proper permissions
 RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data
 
-USER nextjs
-
 EXPOSE 3000
+EXPOSE 4000
 
 ENV PORT 3000
 ENV HOSTNAME "0.0.0.0"
 ENV DATABASE_URL="file:/app/data/playlist.db"
+# Ensure Node can resolve modules from standalone bundle when running custom server
+ENV NODE_PATH="/app/.next/standalone/node_modules"
 
-# Hydrate DB volume on start (if missing) and run server
-CMD ["sh", "-lc", "if [ ! -f /app/data/playlist.db ] && [ -f /app/.seed/playlist.db ]; then cp /app/.seed/playlist.db /app/data/playlist.db; fi; node server.js"]
+# Copy custom server script (Socket.IO + Next) into runtime image
+COPY --from=builder /app/server.js /app/server.js
+COPY --from=builder /app/start.sh /app/start.sh
+RUN chmod +x /app/start.sh && chown nextjs:nodejs /app/start.sh
+
+# Hydrate DB volume on start (if missing) and run custom server (serves Next.js + Socket.IO)
+USER nextjs
+
+CMD ["/app/start.sh"]
 

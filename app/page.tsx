@@ -29,6 +29,7 @@ import { useSwipe } from "@/hooks/use-swipe"
 import { ShareDialog } from "@/components/share-dialog"
 import { usePlayerStore, type PlayerState } from "@/store/use-player-store"
 import { motion } from "framer-motion"
+import { calculatePosition } from "@/lib/position"
 
 interface Track {
   id: string
@@ -99,11 +100,11 @@ export default function Home() {
       type: "system",
     },
   ])
-  const [currentUser] = useState({ id: "user1", name: "You" })
+  const [currentUser] = useState({ id: "user-1", name: "You" })
   const [users, setUsers] = useState<User[]>([
-    { id: "user1", name: "You", status: "online", avatar: "🎧" },
-    { id: "user2", name: "DJ Alex", status: "online", avatar: "🎵" },
-    { id: "user3", name: "Music Fan", status: "away", avatar: "♪" },
+    { id: "user-1", name: "You", status: "online", avatar: "🎧" },
+    { id: "user-2", name: "DJ Alex", status: "online", avatar: "🎵" },
+    { id: "user-3", name: "Music Fan", status: "away", avatar: "♪" },
   ])
   const [isTyping, setIsTyping] = useState(false)
   const [typingUser, setTypingUser] = useState<string>()
@@ -171,38 +172,27 @@ export default function Home() {
   })
 
   const messageIdRef = useRef(1000)
-  const playlistIdRef = useRef(2)
 
-  // Fetch tracks from API
+  // Fetch tracks and playlist from API
   useEffect(() => {
-    const fetchTracks = async () => {
+    const fetchData = async () => {
       try {
         setTracksLoading(true)
-        const response = await fetch("/api/tracks")
-        const data = await response.json()
-        setTracks(data)
-      } catch (error) {
-        console.error("Failed to fetch tracks:", error)
-        // Fallback to demo tracks if API fails
-        setTracks([
-          {
-            id: "1",
-            title: "Midnight Dreams",
-            artist: "The Echoes",
-            album: "Night Sessions",
-            duration_seconds: 240,
-            genre: "Electronic",
-            category: "Chill",
-            audioUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-            coverUrl: "https://picsum.photos/seed/1000/400/400",
-            lyrics: "Under violet skies, we fade into the night...",
-          },
+        const [tracksRes, playlistRes] = await Promise.all([
+          fetch("/api/tracks"),
+          fetch("/api/playlist"),
         ])
+        const tracksJson = await tracksRes.json()
+        const playlistJson = await playlistRes.json()
+        setTracks(tracksJson)
+        if (Array.isArray(playlistJson)) setPlaylist(playlistJson)
+      } catch (error) {
+        console.error("Failed to load initial data", error)
       } finally {
         setTracksLoading(false)
       }
     }
-    fetchTracks()
+    fetchData()
   }, [])
 
   const playlistTrackIds = new Set<string>(playlist.map((item: PlaylistItem) => item.track_id))
@@ -225,121 +215,71 @@ export default function Home() {
       }
 
       setMessages((prev: Message[]) => [...prev, newMessage])
-
-      if (Math.random() > 0.6) {
-        setTimeout(() => {
-          const otherUsers = users.filter((u: User) => u.id !== currentUser.id && u.status === "online")
-          if (otherUsers.length > 0) {
-            const randomUser = otherUsers[Math.floor(Math.random() * otherUsers.length)]
-            setIsTyping(true)
-            setTypingUser(randomUser.name)
-
-            setTimeout(() => {
-              const response: Message = {
-                id: `msg${messageIdRef.current++}`,
-                userId: randomUser.id,
-                userName: randomUser.name,
-                content: "Great track choice! 🎶",
-                timestamp: new Date(),
-                type: "message",
-              }
-              setMessages((prev: Message[]) => [...prev, response])
-              setIsTyping(false)
-            }, 1500)
-          }
-        }, 800)
-      }
     },
-    [currentUser, users],
+    [currentUser],
   )
 
-  useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null
-      const isTyping = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-      if (e.code === "Space") {
-        if (!isTyping) {
-          e.preventDefault()
-        }
-      } else if (e.code === "ArrowRight") {
-        if (!isTyping) handleSkipToNext()
-      } else if (e.code === "ArrowLeft") {
-        if (!isTyping) handleSkipToPrevious()
-      } else if (e.ctrlKey && e.key === "s") {
-        if (!isTyping) {
-          e.preventDefault()
-          handleExportPlaylist()
-        }
-      } else if (e.ctrlKey && e.key === "/") {
-        if (!isTyping) {
-          e.preventDefault()
-          handleShuffle()
-        }
+  // Add
+  const handleAddTrack = useCallback(
+    async (track: Track) => {
+      // Optimistic: prevent dups
+      if (playlist.some((p) => p.track_id === track.id)) {
+        setError("Track is already in the playlist")
+        return
       }
-    }
+      try {
+        const res = await fetch("/api/playlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ track_id: track.id, added_by: currentUser.name }),
+        })
+        const created = await res.json()
+        if (!res.ok) throw created
+        setPlaylist((prev) => [...prev, created])
+        ;(socket as any).emit("track:add", { item: created })
+      } catch (e: any) {
+        setError(e?.error?.message || "Failed to add track")
+      }
+    },
+    [playlist, currentUser.name],
+  )
 
-    window.addEventListener("keydown", handleKeyPress)
-    return () => window.removeEventListener("keydown", handleKeyPress)
+  // Remove
+  const handleRemoveTrack = useCallback(async (id: string) => {
+    const previous = playlist
+    setPlaylist((prev) => prev.filter((p) => p.id !== id))
+    try {
+      const res = await fetch(`/api/playlist/${id}`, { method: "DELETE" })
+      if (!res.ok) throw new Error("delete failed")
+      ;(socket as any).emit("track:remove", { id })
+    } catch {
+      setPlaylist(previous)
+      setError("Failed to remove track")
+    }
   }, [playlist])
 
-  const handleAddTrack = useCallback(
-    (track: Track) => {
-      setPlaylist((prev: PlaylistItem[]) => {
-        const alreadyAdded = prev.some((item: PlaylistItem) => item.track_id === track.id)
-        if (alreadyAdded) {
-          setError("Track is already in the playlist")
-          return prev
-        }
-
-        const newItem: PlaylistItem = {
-          id: `p${playlistIdRef.current++}`,
-          track_id: track.id,
-          track,
-          position: Math.max(...prev.map((p: PlaylistItem) => p.position), 0) + 1,
-          votes: 0,
-          added_by: "User",
-          added_at: new Date().toISOString(),
-          is_playing: false,
-          is_favorite: false,
-        }
-
-        return [...prev, newItem]
-      })
-
-      handleSendMessage(`Added "${track.title}" by ${track.artist} to the queue!`)
-      try { (socket as any).emit("track:add", { item: track }) } catch {}
-    },
-    [handleSendMessage],
-  )
-
-  const handleRemoveTrack = useCallback((id: string) => {
-    setPlaylist((prev: PlaylistItem[]) => prev.filter((item: PlaylistItem) => item.id !== id))
-    try { (socket as any).emit("track:remove", { id }) } catch {}
-  }, [])
-
+  // Vote
   const handleVote = useCallback(
-    (id: string, direction: "up" | "down") => {
-      setPlaylist((prev: PlaylistItem[]) =>
-        prev.map((item: PlaylistItem) =>
-          item.id === id
-            ? {
-                ...item,
-                votes: item.votes + (direction === "up" ? 1 : -1),
-              }
-            : item,
-        ),
-      )
-      try { (socket as any).emit("track:vote", { id, direction }) } catch {}
-
-      setAnalytics((prev: Analytics) => ({
-        ...prev,
-        averageVotesPerTrack:
-          prev.totalTracksPlayed > 0
-            ? (playlist.reduce((sum: number, item: PlaylistItem) => sum + Math.abs(item.votes), 0) + 1) / prev.totalTracksPlayed
-            : 0,
-      }))
+    async (id: string, direction: "up" | "down") => {
+      const delta = direction === "up" ? 1 : -1
+      setPlaylist((prev) => prev.map((i) => (i.id === id ? { ...i, votes: i.votes + delta } : i)))
+      try {
+        const res = await fetch(`/api/playlist/${id}/vote`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ direction }),
+        })
+        const updated = await res.json()
+        if (!res.ok) throw updated
+        setPlaylist((prev) => prev.map((i) => (i.id === id ? { ...i, votes: updated.votes } : i)))
+        ;(socket as any).emit("track:vote", { id, votes: updated.votes })
+      } catch (e) {
+        // revert on failure
+        setPlaylist((prev) => prev.map((i) => (i.id === id ? { ...i, votes: i.votes - delta } : i)))
+        setError("Failed to vote")
+      }
     },
-    [playlist],
+    [],
   )
 
   const handleToggleFavorite = useCallback(
@@ -371,69 +311,75 @@ export default function Home() {
     e.dataTransfer.dropEffect = "move"
   }
 
+  // Reorder using fractional positions
   const handleDropBetween = (targetItem: PlaylistItem | null, isAfter: boolean) => {
     if (!draggedItem) return
     if (draggedItem.id === targetItem?.id) return
 
-    setPlaylist((prev: PlaylistItem[]) => {
-      const sorted = [...prev].sort((a: PlaylistItem, b: PlaylistItem) => a.position - b.position)
-      const draggedIndex = sorted.findIndex((item: PlaylistItem) => item.id === draggedItem.id)
+    setPlaylist((prev) => {
+      const ordered = [...prev].sort((a, b) => a.position - b.position)
+      const draggedIndex = ordered.findIndex((i) => i.id === draggedItem.id)
 
-      let targetIndex = -1
-      if (targetItem) {
-        targetIndex = sorted.findIndex((item: PlaylistItem) => item.id === targetItem.id)
-        if (isAfter) targetIndex++
-      } else {
-        targetIndex = sorted.length
-      }
+      let insertIndex = targetItem ? ordered.findIndex((i) => i.id === targetItem.id) : ordered.length
+      if (isAfter && insertIndex >= 0) insertIndex += 1
 
-      if (draggedIndex === targetIndex || draggedIndex === targetIndex - 1) {
-        setDraggedItem(null)
-        return prev
-      }
+      const prevNeighbor = ordered[insertIndex - 1] || null
+      const nextNeighbor = ordered[insertIndex] || null
+      const newPos = calculatePosition(prevNeighbor?.position ?? null, nextNeighbor?.position ?? null)
 
-      const newPlaylist = prev.filter((item: PlaylistItem) => item.id !== draggedItem.id)
-      const insertIndex = newPlaylist.findIndex((item: PlaylistItem) => sorted[targetIndex]?.id && item.id === sorted[targetIndex].id)
-      const finalIndex = insertIndex >= 0 ? (isAfter ? insertIndex + 1 : insertIndex) : newPlaylist.length
+      // optimistic update
+      const next = prev.map((i) => (i.id === draggedItem.id ? { ...i, position: newPos } : i))
+      // persist
+      fetch(`/api/playlist/${draggedItem.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ position: newPos }),
+      })
+        .then(() => {
+          ;(socket as any).emit("track:reorder", { id: draggedItem.id })
+        })
+        .catch(() => setError("Failed to reorder"))
 
-      newPlaylist.splice(finalIndex, 0, draggedItem)
-
-      return newPlaylist.map((item: PlaylistItem, idx: number) => ({
-        ...item,
-        position: idx + 1,
-      }))
+      return next
     })
 
     setDraggedItem(null)
-    try { (socket as any).emit("track:reorder", { id: draggedItem.id }) } catch {}
   }
 
   const handleSetPlaying = useCallback(
-    (id: string) => {
-      setPlaylist((prev: PlaylistItem[]) =>
-        prev.map((item: PlaylistItem) => ({
-          ...item,
-          is_playing: item.id === id,
-        })),
-      )
+    async (id: string) => {
+      // optimistic
+      setPlaylist((prev) => prev.map((i) => ({ ...i, is_playing: i.id === id })))
       setIsPlaying(true)
       setProgress(0)
 
-      const playingTrack = playlist.find((item: PlaylistItem) => item.id === id)
+      const playingTrack = playlist.find((p) => p.id === id)
       if (playingTrack) {
         usePlayerStore.getState().setTrack(playingTrack.track)
-        try { (socket as any).emit("track:playing", { id }) } catch {}
-        setHistory((prev: PlayHistoryItem[]) => [
-          {
-            id: `h${Date.now()}`,
-            title: playingTrack.track.title,
-            artist: playingTrack.track.artist,
-            playedAt: new Date(),
-            duration: playingTrack.track.duration_seconds,
-            votes: playingTrack.votes,
-          },
-          ...prev.slice(0, 49),
-        ])
+      }
+
+      try {
+        await fetch(`/api/playlist/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ is_playing: true }),
+        })
+        ;(socket as any).emit("track:playing", { id })
+        if (playingTrack) {
+          setHistory((prev) => [
+            {
+              id: `h${Date.now()}`,
+              title: playingTrack.track.title,
+              artist: playingTrack.track.artist,
+              playedAt: new Date(),
+              duration: playingTrack.track.duration_seconds,
+              votes: playingTrack.votes,
+            },
+            ...prev.slice(0, 49),
+          ])
+        }
+      } catch {
+        setError("Failed to set playing")
       }
     },
     [playlist, setProgress],
@@ -536,6 +482,34 @@ export default function Home() {
 
     setError(null)
   }, [playlist])
+
+  // Realtime listeners
+  useEffect(() => {
+    const offAdded = socket.on("track:added" as any, (data: any) => {
+      const item = (data as any).item
+      setPlaylist((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]))
+    })
+    const offRemoved = socket.on("track:removed" as any, (data: any) => {
+      setPlaylist((prev) => prev.filter((p) => p.id !== (data as any).id))
+    })
+    const offVoted = socket.on("track:voted" as any, (data: any) => {
+      setPlaylist((prev) => prev.map((p) => (p.id === (data as any).id ? { ...p, votes: (data as any).votes } : p)))
+    })
+    const offReordered = socket.on("track:reordered" as any, () => {
+      // Playlist will be updated by patch response optimistically; optional refetch could be added
+    })
+    const offPlaying = socket.on("track:playing" as any, (data: any) => {
+      const id = (data as any).id
+      setPlaylist((prev) => prev.map((i) => ({ ...i, is_playing: i.id === id })))
+    })
+    return () => {
+      offAdded?.()
+      offRemoved?.()
+      offVoted?.()
+      offReordered?.()
+      offPlaying?.()
+    }
+  }, [])
 
   const totalDuration = playlist.reduce((sum: number, item: PlaylistItem) => sum + item.track.duration_seconds, 0)
   const totalVotes = playlist.reduce((sum: number, item: PlaylistItem) => sum + item.votes, 0)
@@ -675,7 +649,7 @@ export default function Home() {
         </div>
 
         {/* Main Content Area */}
-        <div className="flex-1 min-h-0 px-6 pb-12 lg:pb-16 overflow-y-auto">
+        <div className="flex-1 min-h-0 px-6 pb-24 lg:pb-28 overflow-y-auto">
           {/* Music Banner */}
           <div className="shrink-0 pt-6 mb-6">
             <MusicBanner />
@@ -799,7 +773,7 @@ export default function Home() {
                 />
               </div>
 
-              <div className="flex-3 flex flex-col gap-4 overflow-hidden min-h-0">
+              <div className="flex-3 flex flex-col gap-4 overflow-visible min-h-0">
 
                 <PlaylistAdvancedMenu
                   playlist={sortedPlaylist}
@@ -807,10 +781,10 @@ export default function Home() {
                   onExportPlaylist={handleExportPlaylist}
                 />
 
-                <div className="flex-1 flex flex-col overflow-hidden min-h-[320px] md:min-h-[380px] lg:min-h-[420px]">
+                <div className="flex-1 flex flex-col overflow-visible min-h-[520px] md:min-h-[600px] lg:min-h-[720px]">
                   <h2 className="text-lg font-bold mb-3">Queue ({sortedPlaylist.length})</h2>
                   <div
-                    className="flex-1 overflow-y-auto max-h-[50vh] space-y-2 pr-2 scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent"
+                    className="flex-1 space-y-2 pr-2 scrollbar-thin scrollbar-thumb-purple-500/30 scrollbar-track-transparent"
                     onDragOver={handleDragOver}
                     onDrop={(e: DragEvent) => {
                       e.preventDefault()
