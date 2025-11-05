@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "prebuild": "prisma generate",
     "build": "next build",
     "dev": "next dev",
     "dev:ws": "node server.js",
@@ -14,6 +15,7 @@
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@prisma/client": "^6.18.0",
     "@faker-js/faker": "^10.1.0",
     "@hookform/resolvers": "^3.10.0",
     "@jest/globals": "latest",
@@ -79,7 +81,6 @@
   },
   "devDependencies": {
     "@netlify/plugin-nextjs": "^5.8.0",
-    "@prisma/client": "^6.18.0",
     "@tailwindcss/postcss": "^4.1.9",
     "@types/node": "^22.19.0",
     "@types/react": "^18.3.26",
