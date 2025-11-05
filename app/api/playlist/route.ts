@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server"
 import { PrismaClient } from "@prisma/client"
+import { ensureWritableSqliteDb } from "@/lib/runtime-db"
 import { broadcastEvent } from "@/lib/events"
 
+// Ensure DB file is placed in /tmp when running on Netlify
+ensureWritableSqliteDb()
 const prisma = new PrismaClient()
 
 export async function GET() {

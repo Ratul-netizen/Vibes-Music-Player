@@ -27,5 +27,5 @@
   # Instruct npm to bypass strict peer conflicts (React19 vs vaul@0.9.9)
   NPM_FLAGS = "--legacy-peer-deps"
   # Prisma/SQLite connection (file included in repo)
-  DATABASE_URL = "file:./data/playlist.db"
+  DATABASE_URL = "file:/tmp/playlist.db"
 

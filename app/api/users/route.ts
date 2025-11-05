@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
 import { PrismaClient } from "@prisma/client"
+import { ensureWritableSqliteDb } from "@/lib/runtime-db"
 
+ensureWritableSqliteDb()
 const prisma = new PrismaClient()
 
 export async function GET() {

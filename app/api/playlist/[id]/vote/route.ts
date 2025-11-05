@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client"
+import { ensureWritableSqliteDb } from "@/lib/runtime-db"
 import { broadcastEvent } from "@/lib/events"
 
+ensureWritableSqliteDb()
 const prisma = new PrismaClient()
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {

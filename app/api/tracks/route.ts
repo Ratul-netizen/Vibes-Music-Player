@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { PrismaClient } from "@prisma/client"
+import { ensureWritableSqliteDb } from "@/lib/runtime-db"
 import { faker } from "@faker-js/faker"
 
 const genres = ["Electronic", "Pop", "Rock", "Jazz", "Synthwave", "Hip-Hop", "Ambient", "Indie", "R&B", "Country"]
@@ -28,6 +29,7 @@ function generateTracks() {
   })
 }
 
+ensureWritableSqliteDb()
 const prisma = new PrismaClient()
 
 export async function GET(req: Request) {
