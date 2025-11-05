@@ -28,4 +28,6 @@
   NPM_FLAGS = "--legacy-peer-deps"
   # Prisma/SQLite connection (file included in repo)
   DATABASE_URL = "file:/tmp/playlist.db"
+  # Disable client WS in production (no Socket.IO server on Netlify)
+  NEXT_PUBLIC_WS_ENABLED = "false"
 
