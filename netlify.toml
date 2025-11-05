@@ -9,4 +9,8 @@
 [build.environment]
   # Optional but helpful to keep logs clean
   NEXT_TELEMETRY_DISABLED = "1"
+  # Pin Node to a stable LTS compatible with many deps
+  NODE_VERSION = "20"
+  # Force Netlify to use npm even if pnpm-lock.yaml exists
+  NETLIFY_USE_PNPM = "false"
 
