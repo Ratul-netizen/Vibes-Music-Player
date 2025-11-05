@@ -6,6 +6,17 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+[functions]
+  # Ensure native binaries are available in the AWS Lambda bundle
+  external_node_modules = ["@prisma/client", "prisma", "better-sqlite3"]
+  included_files = [
+    "node_modules/.prisma/client/**",
+    "node_modules/@prisma/client/**",
+    "node_modules/better-sqlite3/**",
+    "prisma/**",
+    "data/**"
+  ]
+
 [build.environment]
   # Optional but helpful to keep logs clean
   NEXT_TELEMETRY_DISABLED = "1"
